@@ -3,9 +3,17 @@
 ## **Dependency**
 
 ```
+
+
 langchain==0.0.278
 
 chromadb==0.4.3
+
+simsimd
+
+sse_starlette
+
+uvicorn
 
 sqlite3==2.6.0
 

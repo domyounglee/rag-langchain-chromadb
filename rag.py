@@ -11,10 +11,16 @@ from langchain.chains.query_constructor.base import AttributeInfo
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.document_transformers import EmbeddingsRedundantFilter
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+    HumanMessagePromptTemplate,
+)
 
 
 # Wrap our vectorstore
 from langchain.retrievers.document_compressors import DocumentCompressorPipeline,EmbeddingsFilter, LLMChainExtractor
+from langchain.chains import RetrievalQAWithSourcesChain
 
 
 
@@ -64,6 +70,10 @@ class FinanceRAG:
 
         #set llm pipeline 
         self.set_pipeline()
+
+        #set RetrievalQAchain for langserve
+        self.setRetrievalQAChain()
+
 
     def setup_logging(self):
         import logging
@@ -135,6 +145,8 @@ class FinanceRAG:
 
 
     def define_templates(self):
+
+        #templates for query expansions
         self.query_prompt_template = (
             "아래는 지식 베이스에서 검색하기위해 질문 바탕으로 검색쿼리를 생성해야하는 Task입니다.\n"
             "검색 쿼리를 생성할때 증권 이름, 회사명은 필수로 생성하고 관련 키워드를 검색쿼리로 생성합니다.\n\n"
@@ -149,13 +161,25 @@ class FinanceRAG:
             "검색 쿼리:\n"
         )
 
-        self.system_chat_template = (
-            "당신은 증권 리포트를 보고 증권에 관한 질문에 올바른 답변을 해주는 지능형 비서입니다. 대답은 간결하고 명확하게 합니다."
-        )
 
-        user_content = """시작!\n\n출처:\n{context}\n\n질문:{question}\n\n답변:"""
+        #templates for lm generation
 
-        self.template = self.system_chat_template + "\n\n" + user_content
+        self.system_chat_template="""Use the following pieces of context to answer the users question shortly.
+        Given the following summaries of a long document and a question, create a final answer with references ("SOURCES"), use "SOURCES" in capital letters regardless of the number of sources.
+        If you don't know the answer, just say that "I don't know", don't try to make up an answer.
+        ----------------
+        {summaries}
+
+        You MUST answer in Korean and in Markdown format:"""
+
+        self.user_content = """\n\n질문:{question}\n\n답변:"""
+
+        messages = [
+            SystemMessagePromptTemplate.from_template(self.system_chat_template),
+            HumanMessagePromptTemplate.from_template(self.user_content)
+        ]
+        self.template = ChatPromptTemplate.from_messages(messages)
+
 
 
     def set_pipeline(self):
@@ -255,20 +279,41 @@ class FinanceRAG:
             retriever = self.base_retriever
 
         with torch.no_grad():
-            self.qa = RetrievalQA.from_chain_type(
+            self.qa = RetrievalQAWithSourcesChain.from_chain_type(
                 llm=HuggingFacePipeline(pipeline=self.pipe),
                 chain_type="stuff",
                 retriever = retriever,
                 chain_type_kwargs={
-                    "prompt": PromptTemplate(
-                        template=self.template, input_variables=["context", "question"]
-                    )
+                    "prompt":self.template
                 },
                 return_source_documents=True,
             )
 
         return self.qa(question)
 
+    def setRetrievalQAChain(self, use_compressor=True, top_k_docs = 2):
+        search_kwargs = {"k": top_k_docs}
+
+        self.base_retriever = self.vectordb.as_retriever( search_type='similarity', search_kwargs = search_kwargs)
+
+        if use_compressor:
+            self.compressed_retriever = ContextualCompressionRetriever( base_compressor = self.pipeline_compressor, base_retriever = self.base_retriever, search_kwargs = search_kwargs)
+            retriever = self.compressed_retriever
+        else:
+            retriever = self.base_retriever
+
+        with torch.no_grad():
+            self.qa = RetrievalQAWithSourcesChain.from_chain_type(
+                llm=HuggingFacePipeline(pipeline=self.pipe),
+                chain_type="stuff",
+                retriever = retriever,
+                chain_type_kwargs={
+                    "prompt":self.template
+                },
+                return_source_documents=True,
+            )
+
+    
 
     def generate(self, q):
         self.logger.info("Processing question: %s", q)
@@ -283,7 +328,6 @@ class FinanceRAG:
 
         # 3. retrieve and generate
         generated_answer = self.retrieve_generate(q, comp)
-        self.logger.info("Generated answer: %s", generated_answer)
 
         return generated_answer
 
@@ -304,8 +348,41 @@ if __name__ == '__main__':
 
     fin_rag = FinanceRAG(dict_path, smodel_name, vectordb_path, llm_model, llm_model, llm_hyp)
 
-    while(True):
-        question = input('질문을 입력하세요:')
-        result = fin_rag.generate(question)
-        
-        pprint(result)
+    from fastapi import FastAPI
+    from langserve import add_routes
+    import uvicorn
+    chain = fin_rag.qa
+    app = FastAPI(title="Retrieval App")
+
+    # Add routes for the chain
+    add_routes(app, chain, path='/hit')
+
+    uvicorn.run(app, host="localhost", port=8000)
+
+    
+    """   
+    import gradio as gr
+    def respond(message, chat_history):  # 채팅봇의 응답을 처리하는 함수를 정의합니다.
+
+        result = fin_rag.generate(message)
+
+        bot_message = result['answer']
+
+        for i, doc in enumerate(result['source_documents']):
+            bot_message += '[' + str(i+1) + '] ' + doc.metadata['source'] + '(' + str(doc.metadata['exchange']) + ') '
+
+        chat_history.append((message, bot_message))  # 채팅 기록에 사용자의 메시지와 봇의 응답을 추가합니다.
+
+        return "", chat_history  # 수정된 채팅 기록을 반환합니다.
+
+    with gr.Blocks() as demo:  # gr.Blocks()를 사용하여 인터페이스를 생성합니다.
+        chatbot = gr.Chatbot(label="채팅창")  # '채팅창'이라는 레이블을 가진 채팅봇 컴포넌트를 생성합니다.
+        msg = gr.Textbox(label="입력")  # '입력'이라는 레이블을 가진 텍스트박스를 생성합니다.
+        clear = gr.Button("초기화")  # '초기화'라는 레이블을 가진 버튼을 생성합니다.
+
+        msg.submit(respond, [msg, chatbot], [msg, chatbot])  # 텍스트박스에 메시지를 입력하고 제출하면 respond 함수가 호출되도록 합니다.
+        clear.click(lambda: None, None, chatbot, queue=False)  # '초기화' 버튼을 클릭하면 채팅 기록을 초기화합니다.
+
+    demo.launch(debug=True)  # 인터페이스를 실행합니다. 실행하면 사용자는 '입력' 텍스트박스에 메시지를 작성하고 제출할 수 있으며, '초기화' 버튼을 통해 채팅 기록을 초기화 할 수 있습니다.
+
+    """
