@@ -27,6 +27,18 @@ from langchain.chains import RetrievalQAWithSourcesChain
 from langchain.prompts import PromptTemplate
 import os 
 from pprint import pprint 
+
+from langchain.chat_models import ChatOpenAI
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.pydantic_v1 import BaseModel
+from langchain.schema.output_parser import StrOutputParser
+from langchain.schema.runnable import RunnableParallel, RunnablePassthrough
+from langchain.vectorstores import Chroma
+
+
+import sys
+sys.path.append("../")
+
 os.environ['ANONYMIZED_TELEMETRY']='false'
 
 
@@ -102,7 +114,7 @@ class FinanceRAG:
         self.logger.info("set compressor pippline")
         self.splitter = CharacterTextSplitter(chunk_size=200, chunk_overlap=0, separator=". ")
         self.redundant_filter = EmbeddingsRedundantFilter(embeddings=self.smodel)
-        self.relevant_filter = EmbeddingsFilter(embeddings = self.smodel, similarity_threshold=0.3, k=2)
+        self.relevant_filter = EmbeddingsFilter(embeddings = self.smodel, similarity_threshold=0.1, k=2)
         self.pipeline_compressor = DocumentCompressorPipeline(
             transformers=[self.splitter, self.redundant_filter, self.relevant_filter]
             
@@ -172,13 +184,29 @@ class FinanceRAG:
 
         You MUST answer in Korean and in Markdown format:"""
 
+        self.system_chat_template2="""Use the following pieces of context to answer the users question shortly.
+        Given the following summaries of a long document and a question, create a final answer with references ("SOURCES"), use "SOURCES" in capital letters regardless of the number of sources.
+        If you don't know the answer, just say that "I don't know", don't try to make up an answer.
+        ----------------
+        {context}
+
+        You MUST answer in Korean and in Markdown format:"""
+
+
         self.user_content = """\n\n질문:{question}\n\n답변:"""
 
         messages = [
             SystemMessagePromptTemplate.from_template(self.system_chat_template),
             HumanMessagePromptTemplate.from_template(self.user_content)
         ]
+
+        messages2 = [
+            SystemMessagePromptTemplate.from_template(self.system_chat_template2),
+            HumanMessagePromptTemplate.from_template(self.user_content)
+        ]
         self.template = ChatPromptTemplate.from_messages(messages)
+
+        self.template_lcel = ChatPromptTemplate.from_messages(messages2)
 
 
 
@@ -291,6 +319,8 @@ class FinanceRAG:
 
         return self.qa(question)
 
+
+
     def setRetrievalQAChain(self, use_compressor=True, top_k_docs = 2):
         search_kwargs = {"k": top_k_docs}
 
@@ -303,7 +333,7 @@ class FinanceRAG:
             retriever = self.base_retriever
 
         with torch.no_grad():
-            self.qa = RetrievalQAWithSourcesChain.from_chain_type(
+            self.RetrievalQAChain = RetrievalQAWithSourcesChain.from_chain_type(
                 llm=HuggingFacePipeline(pipeline=self.pipe),
                 chain_type="stuff",
                 retriever = retriever,
@@ -332,57 +362,84 @@ class FinanceRAG:
         return generated_answer
 
 
-if __name__ == '__main__':
+dict_path = '/home/hanati/hit/output_assets/주식명_동의어사전_new.xlsx'
 
-    dict_path = '/home/hanati/hit/output_assets/주식명_동의어사전_new.xlsx'
+smodel_name = '/home/hanati/hit/sentence_embedding_plm/ko-sbert-multitask'
 
-    smodel_name = '/home/hanati/hit/sentence_embedding_plm/ko-sbert-multitask'
+vectordb_path = '/home/hanati/hit/db_old'
 
-    vectordb_path = '/home/hanati/hit/db_old'
+question = '2023년도 전기차 시장 동향 알려줘'
 
-    question = '2023년도 전기차 시장 동향 알려줘'
+llm_model = '/home/hanati/hit/llm/polyglot-ko-1.3b'
 
-    llm_model = '/home/hanati/hit/llm/polyglot-ko-1.3b'
+llm_hyp = {}
 
-    llm_hyp = {}
+fin_rag = FinanceRAG(dict_path, smodel_name, vectordb_path, llm_model, llm_model, llm_hyp)
 
-    fin_rag = FinanceRAG(dict_path, smodel_name, vectordb_path, llm_model, llm_model, llm_hyp)
 
-    from fastapi import FastAPI
-    from langserve import add_routes
-    import uvicorn
-    chain = fin_rag.qa
-    app = FastAPI(title="Retrieval App")
 
-    # Add routes for the chain
-    add_routes(app, chain, path='/hit')
 
-    uvicorn.run(app, host="localhost", port=8000)
+# RAG prompt
 
-    
-    """   
-    import gradio as gr
-    def respond(message, chat_history):  # 채팅봇의 응답을 처리하는 함수를 정의합니다.
+# LLM
+model = HuggingFacePipeline(pipeline=fin_rag.pipe)
 
-        result = fin_rag.generate(message)
+# RAG chain
+chain = fin_rag.RetrievalQAChain
 
-        bot_message = result['answer']
+# Add typing for input
+#class Question(BaseModel):
+#    __root__: str
+#chain = chain.with_types(input_type=Question)
 
-        for i, doc in enumerate(result['source_documents']):
-            bot_message += '[' + str(i+1) + '] ' + doc.metadata['source'] + '(' + str(doc.metadata['exchange']) + ') '
 
-        chat_history.append((message, bot_message))  # 채팅 기록에 사용자의 메시지와 봇의 응답을 추가합니다.
+#print(chain.invoke({"question": "2020년도 현대차 목표주가 얼마야?"}))
+from langchain.schema import StrOutputParser
+from langchain.schema.runnable import RunnablePassthrough
 
-        return "", chat_history  # 수정된 채팅 기록을 반환합니다.
 
-    with gr.Blocks() as demo:  # gr.Blocks()를 사용하여 인터페이스를 생성합니다.
-        chatbot = gr.Chatbot(label="채팅창")  # '채팅창'이라는 레이블을 가진 채팅봇 컴포넌트를 생성합니다.
-        msg = gr.Textbox(label="입력")  # '입력'이라는 레이블을 가진 텍스트박스를 생성합니다.
-        clear = gr.Button("초기화")  # '초기화'라는 레이블을 가진 버튼을 생성합니다.
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
 
-        msg.submit(respond, [msg, chatbot], [msg, chatbot])  # 텍스트박스에 메시지를 입력하고 제출하면 respond 함수가 호출되도록 합니다.
-        clear.click(lambda: None, None, chatbot, queue=False)  # '초기화' 버튼을 클릭하면 채팅 기록을 초기화합니다.
+template = """다음 문맥을 사용하여 사용자의 질문에 짧게 답하십시오.  긴 문서와 질문에 대한 다음 요약이 주어졌을 때 참고 문헌("출처")이 포함된 최종 답변을 작성하세요. 답을 모르는 경우, 답을 만들려고 하지 말고 "모름"이라고 말하세요.
+----------------
+출처 : {context}
 
-    demo.launch(debug=True)  # 인터페이스를 실행합니다. 실행하면 사용자는 '입력' 텍스트박스에 메시지를 작성하고 제출할 수 있으며, '초기화' 버튼을 통해 채팅 기록을 초기화 할 수 있습니다.
+질문: {question}
+도움 되는 답변:"""
+rag_prompt_custom = PromptTemplate.from_template(template)
 
-    """
+rag_chain = (
+    {"context": fin_rag.compressed_retriever | format_docs, "question": RunnablePassthrough()}
+    | rag_prompt_custom
+    | model
+    | StrOutputParser()
+)
+
+from operator import itemgetter
+
+from langchain.schema.runnable import RunnableParallel
+
+rag_chain_from_docs = (
+    {
+        "context": lambda input: format_docs(input["documents"]),
+        "question": itemgetter("question"),
+    }
+    | rag_prompt_custom
+    | model
+    | StrOutputParser()
+)
+rag_chain_with_source = RunnableParallel(
+    {"documents": fin_rag.compressed_retriever, "question": RunnablePassthrough()}
+) | {
+    "documents": lambda input: [doc.page_content for doc in input["documents"]],
+    "result": lambda input: [doc for doc in input["documents"]],
+    "metadata": lambda input: [doc.metadata for doc in input["documents"]],
+    "similarity_score": lambda input: [doc.state for doc in input["documents"]],
+    "answer": rag_chain_from_docs,
+}
+
+print(rag_chain_with_source.invoke("기아차 2020년도 엽업이익 얼마야?"))
+
+
+

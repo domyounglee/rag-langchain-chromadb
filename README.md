@@ -11,6 +11,8 @@ chromadb==0.4.3
 
 simsimd
 
+langserve[all]==0.0.32
+
 sse_starlette
 
 uvicorn
@@ -18,6 +20,11 @@ uvicorn
 sqlite3==2.6.0
 
 pysqlite3-binary
+
+gradio_client==0.3.0
+
+gradio==3.32.0 
+
 ```
 
 **특이사항**
@@ -36,3 +43,8 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 ```
 
+
+
+https://github.com/langchain-ai/langchain/blob/master/libs/langchain/langchain/retrievers/document_compressors/embeddings_filter.py
+
+line 164 바꿈
