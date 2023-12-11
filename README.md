@@ -48,3 +48,7 @@ sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 https://github.com/langchain-ai/langchain/blob/master/libs/langchain/langchain/retrievers/document_compressors/embeddings_filter.py
 
 line 164 바꿈
+
+
+python main.py path_to_your_config.yml
+
