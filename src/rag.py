@@ -29,13 +29,10 @@ from langchain.vectorstores import Chroma
 
 
 from operator import itemgetter
-
 from langchain.schema import StrOutputParser
-
-
 import argparse
 
-from utils import format_docs, read_json, setup_logging
+from .utils import format_docs, read_json, setup_logging
 
 os.environ['ANONYMIZED_TELEMETRY']='false'
 

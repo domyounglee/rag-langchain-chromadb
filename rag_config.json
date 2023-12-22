@@ -1,8 +1,8 @@
 {
-  "dict_path": "/home/hanati/hit/output_assets/주식명_동의어사전_new.xlsx",
-  "smodel_name": "/home/hanati/hit/sentence_embedding_plm/ko-sbert-multitask",
-  "vectordb_path": "/home/hanati/hit/db_old",
-  "llm_model": "/home/hanati/hit/llm/polyglot-ko-1.3b",
+  "dict_path": "./assets/주식명_동의어사전_new.xlsx",
+  "smodel_name": "./smodel/ko-sbert-multitask",
+  "vectordb_path": "./vectordb/db_old",
+  "llm_model": "./llm/polyglot-ko-1.3b",
   "generation_hyp": {
     "max_new_tokens": 50,
     "temperature":  0.0001,
